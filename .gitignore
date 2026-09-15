@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Environment variables / API keys
+.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Local database
+*.db
+
+# Editor / OS
+.vscode/
+.DS_Store
