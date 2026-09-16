@@ -16,3 +16,7 @@ frontend/dist/
 # Editor / OS
 .vscode/
 .DS_Store
+
+# Downloaded raw datasets
+data/raw/*
+!data/raw/.gitkeep

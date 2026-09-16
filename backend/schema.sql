@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS candidates (
     FOREIGN KEY (race_id) REFERENCES races(id)
 );
 
+-- Financial fields are mapped from OpenFEC candidate totals:
+-- total_receipts       <- receipts
+-- total_disbursements  <- disbursements
+-- cash_on_hand         <- last_cash_on_hand_end_period
+-- coverage_end_date    <- coverage_end_date
 CREATE TABLE IF NOT EXISTS finance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     candidate_id INTEGER NOT NULL,
