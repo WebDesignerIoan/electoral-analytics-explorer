@@ -1,37 +1,49 @@
 import pandas as pd
 
 from inspect_election_results import get_senate_results
-from inspect_fec_api import get_candidate_record
+from inspect_fec_api import get_candidate_finance
 
-# ---------------------------------------------------------
-# CAMPAIGN FINANCE DATA
-# ---------------------------------------------------------
-
-fetterman = get_candidate_record("Fetterman", 2022, "PA")
-oz = get_candidate_record("Mehmet Oz", 2022, "PA")
-
-finance_df = pd.DataFrame([fetterman, oz])
+ELECTION_YEAR = 2022
+STATE = "PA"
 
 
 # ---------------------------------------------------------
 # ELECTION RESULT DATA
 # ---------------------------------------------------------
 
-results_df = get_senate_results("PA")
+results_df = get_senate_results(STATE)
 
-# Keep only the major-party candidates for this comparison.
+# Keep only the Democratic and Republican candidates
+# for the major-party comparison.
 major_party_results = results_df[results_df["party"].isin(["D", "R"])].copy()
+
+
+# ---------------------------------------------------------
+# CAMPAIGN FINANCE DATA
+# ---------------------------------------------------------
+
+# The election-results dataset already contains the FEC candidate IDs,
+# so we can use those IDs directly instead of searching by candidate name.
+finance_records = [
+    get_candidate_finance(candidate_id, ELECTION_YEAR)
+    for candidate_id in major_party_results["fec_candidate_id"]
+]
+
+# Each returned dictionary becomes one row in the DataFrame.
+finance_df = pd.DataFrame(finance_records)
 
 
 # ---------------------------------------------------------
 # MERGE MONEY + RESULT DATA
 # ---------------------------------------------------------
 
-# Keep only the election-result fields that add new information.
+# Keep the candidate identity and election-result fields that we need.
 result_fields = major_party_results[
     [
         "fec_candidate_id",
+        "name",
         "party",
+        "state",
         "votes",
         "vote_share",
         "won",
@@ -44,12 +56,13 @@ result_fields = major_party_results[
     }
 )
 
-comparison_df = finance_df.merge(
-    result_fields,
+comparison_df = result_fields.merge(
+    finance_df,
     on="fec_candidate_id",
     how="inner",
     validate="one_to_one",
-)  # one to one: Ensure each candidate appears exactly once in both datasets
+)  # Ensure each candidate appears exactly once in both datasets.
+
 
 # ---------------------------------------------------------
 # DERIVED ANALYTICAL VARIABLES
@@ -67,18 +80,6 @@ comparison_df["two_party_vote_share"] = (
     comparison_df["votes"] / comparison_df["votes"].sum()
 )
 
-# We select all columns to show, including new ones
-columns_to_show = [
-    "fec_candidate_id",
-    "name",
-    "party_code",
-    "total_disbursements",
-    "spending_share",
-    "votes",
-    "vote_share",
-    "two_party_vote_share",
-    "won",
-]
 
 # ---------------------------------------------------------
 # CREATE ONE RACE-LEVEL OBSERVATION
@@ -95,8 +96,7 @@ democrat = comparison_df[comparison_df["party_code"] == "D"].iloc[0]
 # filter to party_code == "R", then take the first matching row.
 republican = comparison_df[comparison_df["party_code"] == "R"].iloc[0]
 
-# Find the actual election winner from the complete result dataset,
-# rather than assuming the winner must be Democratic or Republican.
+# Find the actual winner from the complete election-results dataset.
 winner = results_df[results_df["won"]].iloc[0]
 
 
@@ -128,8 +128,7 @@ race_summary = {
     "vote_margin": (
         democrat["two_party_vote_share"] - republican["two_party_vote_share"]
     ),
-    # If the Democratic candidate won, record D.
-    # Otherwise, for this two-party comparison, record R.
+    # Record the actual winner's party from the complete result dataset.
     "winner_party": winner["party"],
 }
 
@@ -138,8 +137,26 @@ race_summary = {
 # Wrapping it in a list lets pandas interpret it as one DataFrame row.
 race_df = pd.DataFrame([race_summary])
 
+
+# ---------------------------------------------------------
+# OUTPUT
+# ---------------------------------------------------------
+
 print("\nRace-level observation:")
 print(race_df.to_string(index=False))
+
+# Select the fields needed for a concise candidate-level output.
+columns_to_show = [
+    "fec_candidate_id",
+    "name",
+    "party_code",
+    "total_disbursements",
+    "spending_share",
+    "votes",
+    "vote_share",
+    "two_party_vote_share",
+    "won",
+]
 
 print("\n2022 Pennsylvania Senate — money and results:")
 print(comparison_df[columns_to_show].to_string(index=False))

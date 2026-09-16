@@ -22,6 +22,47 @@ headers = {
 }
 
 
+def get_candidate_finance(candidate_id, election_year):
+
+    # Retrieve financial totals for one candidate using the FEC candidate ID.
+
+    totals_url = f"https://api.open.fec.gov/v1/candidate/{candidate_id}/totals/"
+
+    totals_params = {
+        "cycle": election_year,
+        "election_full": False,
+    }
+
+    totals_response = httpx.get(
+        totals_url,
+        params=totals_params,
+        headers=headers,
+        timeout=30,
+    )
+
+    if totals_response.is_error:
+        raise RuntimeError(
+            f"FEC financial totals request failed "
+            f"({totals_response.status_code}): "
+            f"{totals_response.text}"
+        )
+
+    totals_data = totals_response.json()
+
+    if not totals_data["results"]:
+        raise RuntimeError(f"No financial totals found for candidate {candidate_id}.")
+
+    financial_record = totals_data["results"][0]
+
+    return {
+        "fec_candidate_id": candidate_id,
+        "total_receipts": financial_record["receipts"],
+        "total_disbursements": financial_record["disbursements"],
+        "cash_on_hand": financial_record["last_cash_on_hand_end_period"],
+        "coverage_end_date": financial_record["coverage_end_date"],
+    }
+
+
 def get_candidate_record(search_name, election_year, state):
     """
     Search OpenFEC for one Senate candidate and return a flat dictionary
@@ -76,35 +117,10 @@ def get_candidate_record(search_name, election_year, state):
     # 2. GET FINANCIAL TOTALS
     # ---------------------------------------------------------
 
-    candidate_id = candidate["candidate_id"]
-
-    totals_url = f"https://api.open.fec.gov/v1/candidate/{candidate_id}/totals/"
-
-    totals_params = {
-        "cycle": election_year,
-        "election_full": False,
-    }
-
-    totals_response = httpx.get(
-        totals_url,
-        params=totals_params,
-        headers=headers,
-        timeout=30,
+    finance = get_candidate_finance(
+        candidate["candidate_id"],
+        election_year,
     )
-
-    if totals_response.is_error:
-        raise RuntimeError(
-            f"FEC financial totals request failed "
-            f"({totals_response.status_code}): "
-            f"{totals_response.text}"
-        )
-
-    totals_data = totals_response.json()
-
-    if not totals_data["results"]:
-        raise RuntimeError(f"No financial totals found for candidate {candidate_id}.")
-
-    financial_record = totals_data["results"][0]
 
     # ---------------------------------------------------------
     # 3. CREATE ONE ANALYSIS-READY RECORD
@@ -125,10 +141,10 @@ def get_candidate_record(search_name, election_year, state):
         "name": candidate["name"],
         "party": candidate["party_full"],
         "state": candidate["state"],
-        "total_receipts": financial_record["receipts"],
-        "total_disbursements": financial_record["disbursements"],
-        "cash_on_hand": financial_record["last_cash_on_hand_end_period"],
-        "coverage_end_date": financial_record["coverage_end_date"],
+        "total_receipts": finance["total_receipts"],
+        "total_disbursements": finance["total_disbursements"],
+        "cash_on_hand": finance["cash_on_hand"],
+        "coverage_end_date": finance["coverage_end_date"],
     }
 
 
@@ -145,6 +161,12 @@ if __name__ == "__main__":
 
     print("\n2022 Pennsylvania Senate candidate finance data:")
     print(candidate_df.to_string(index=False))
+
+    print("\nDirect finance lookup by FEC candidate ID:")
+
+    fetterman_finance = get_candidate_finance("S6PA00274", 2022)
+
+    print(fetterman_finance)
 
 # STRUCTURE
 # Search for candidate
