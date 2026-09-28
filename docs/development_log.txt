@@ -1,0 +1,576 @@
+Electoral Analytics Explorer
+Development Log
+
+This file is a running record of the main decisions and problems I ran into while building the project.
+I am keeping it mainly so I can remember why the pipeline looks the way it does, and so I can explain
+the decisions later without having to reconstruct them from the Git history.
+
+I am not planning to document every small code change here. I only want to add something when a change
+actually affects the data model, the analysis, or the way the application works.
+
+
+============================================================
+1. First working version: five Senate races
+============================================================
+
+I started with five 2022 Senate races:
+
+- Pennsylvania
+- Arizona
+- Nevada
+- Wisconsin
+- Ohio
+
+The first version of the pipeline was fairly simple:
+
+FEC election workbook
+    -> identify the Democratic and Republican candidates
+    -> get finance totals from OpenFEC
+    -> merge the two datasets using FEC candidate ID
+    -> calculate spending share and two-party vote share
+    -> turn the two candidate rows into one race-level record
+    -> export JSON
+    -> FastAPI
+    -> React
+
+This worked for all five races, which initially made the assumptions in the code look reasonable.
+
+The important assumption was basically:
+
+    one state = one Senate race = one Democratic candidate + one Republican candidate
+
+At this point I deliberately did not spend much time polishing the frontend. I wanted more observations
+before building a scatterplot, because a visualisation based on only five hand-picked races would not be
+very meaningful.
+
+What I learned:
+The first prototype proved that the overall architecture worked, but the sample was too small to test
+whether the data model was realistic.
+
+
+============================================================
+2. Expanding from five races to the full 2022 data
+============================================================
+
+The next step was to stop hard-coding five states and automatically process all states with Senate
+general-election data in the 2022 FEC workbook.
+
+I changed the script so one unusual race would not stop the whole run. Expected data problems were
+caught as RuntimeError, stored with the state and error message, and processing continued.
+
+The first broad run produced:
+
+    21 successfully processed state entries
+    13 skipped state entries
+
+That was the point where the project became much more interesting. The failures were not one bug.
+They included:
+
+- multiple Democratic or Republican candidates;
+- candidate IDs rejected by the API;
+- missing finance totals;
+- non-standard party codes;
+- the same candidate appearing on multiple ballot lines;
+- more than one Senate contest in the same state.
+
+The main decision here was not to start adding code such as:
+
+    if state == "CA":
+    if state == "NY":
+    if state == "AK":
+
+Instead, I grouped the failures by underlying cause and worked through those categories one at a time.
+
+
+============================================================
+3. FEC IDs that looked valid but were rejected
+============================================================
+
+Georgia and North Carolina originally failed with OpenFEC 422 "Invalid candidate_id" responses.
+
+The IDs looked normal when printed, so at first it was not obvious why the API was rejecting them.
+
+After inspecting the source data more carefully, the issue turned out to be trailing whitespace coming
+from the Excel workbook.
+
+I added stripping for important text fields when the election data are loaded:
+
+- FEC candidate ID
+- candidate name
+- party
+
+This is done at the point where external data enter the pipeline instead of later inside the API code.
+
+After that change, Georgia and North Carolina started processing successfully.
+
+The count moved from:
+
+    21 -> 23 successful state entries
+
+This was a useful reminder that Excel data can contain invisible formatting differences that only become
+visible when another system, such as an API, treats the string literally.
+
+
+============================================================
+4. A state is not always one Senate race
+============================================================
+
+California and Oklahoma originally failed because the code found:
+
+    2 Democratic candidates
+    2 Republican candidates
+
+The problem was not duplicated candidate data. Both states actually had two Senate contests in 2022.
+
+I inspected the workbook columns and found that the FEC already distinguishes these using DISTRICT:
+
+    S
+    S-Full Term
+    S-Unexpired Term
+
+So the real problem was my original identifier. I was treating "state" as if it uniquely identified a
+Senate race.
+
+I added get_senate_races(), which finds unique:
+
+    state + district
+
+combinations.
+
+I also changed:
+
+    get_senate_results(state)
+
+to:
+
+    get_senate_results(state, district)
+
+and made the same change to build_race_summary().
+
+This gave:
+
+    34 states
+    36 actual Senate contests
+
+Oklahoma then split cleanly into:
+
+    OK - S-Full Term
+    OK - S-Unexpired Term
+
+with different candidate pairs.
+
+California also split correctly into two separate contests.
+
+This was probably the biggest data-model correction so far. The original five-race prototype had hidden
+the fact that "state" and "race" are not always interchangeable.
+
+
+============================================================
+5. The same candidate can appear on more than one ballot line
+============================================================
+
+Connecticut and New York exposed a different issue.
+
+Examples from the workbook:
+
+Connecticut:
+    Blumenthal - D*
+    Blumenthal - WF
+
+New York:
+    Schumer - D
+    Schumer - WF
+
+    Pinion - R
+    Pinion - CRV
+
+These rows share the same FEC candidate ID. They are not separate candidates.
+
+This was especially visible in New York because Schumer had two rows marked as winning, so the old code
+reported:
+
+    Expected exactly one winner, but found 2
+
+I added a candidate-level aggregation step using fec_candidate_id as the grouping key.
+
+For each candidate:
+
+- votes are summed across ballot lines;
+- won is True if any row is marked as a winner;
+- incumbent is True if any row is marked as incumbent;
+- name/state/year/district are retained;
+- the original party labels are kept in a party_lines list.
+
+I also stopped adding the workbook vote-share percentages together. Instead, after aggregating votes,
+I recalculate:
+
+    candidate votes / total race votes
+
+This avoids carrying forward rounding differences from the source percentages.
+
+After aggregation, for example:
+
+    Schumer [D, WF]
+
+is one candidate rather than two workbook rows.
+
+That fixed the multiple-winner problem and gave a cleaner candidate-level representation of the race.
+
+
+============================================================
+6. Party codes were more complicated than D and R
+============================================================
+
+The first version filtered candidates with:
+
+    party == "D"
+    party == "R"
+
+That did not work for several valid candidates.
+
+The workbook includes labels such as:
+
+    D*
+    DNL
+    D/IP
+    R*
+    R/CON
+
+Instead of overwriting the original party values, I now preserve them in:
+
+    party_lines
+
+and derive a separate analysis field:
+
+    major_party
+
+The mapping is explicit.
+
+Democratic codes currently recognised:
+    D
+    D*
+    DNL
+    D/IP
+
+Republican codes currently recognised:
+    R
+    R*
+    R/CON
+
+Anything else is left outside the D/R classification.
+
+I deliberately did not use loose rules such as:
+
+    if "D" in party
+
+because that could misclassify unrelated codes.
+
+This change allowed Connecticut, North Dakota and Oregon to be handled correctly.
+
+It also handled Utah in the way I wanted:
+Mike Lee is recognised as Republican through R*, but Evan McMullin remains unaffiliated, so Utah still
+does not become a D-vs-R race just because the Republican code was normalised.
+
+
+============================================================
+7. Hawaii and Maryland: missing finance data is not zero
+============================================================
+
+Hawaii and Maryland failed for a different reason: OpenFEC returned no financial totals for the relevant
+Republican candidates.
+
+The API response itself was successful:
+
+    HTTP 200
+
+but contained:
+
+    "results": []
+
+I investigated both cases instead of replacing the missing value with zero.
+
+Hawaii
+------
+
+Candidate:
+    S2HI00155
+
+The candidate had a 2022 principal campaign committee:
+
+    C00800656
+    BOB MCDERMOTT FOR SENATE
+
+The committee history showed activity in 2022, but no processed financial-summary data for that cycle.
+
+I also queried the committee totals endpoint directly for 2022. It returned no results.
+
+Maryland
+--------
+
+Candidate:
+    S6MD03557
+
+The candidate existed in the election results, but the 2022 candidate-to-committee history query returned
+no committee record.
+
+Decision
+--------
+
+I did not convert either of these to:
+
+    spending = 0
+
+because "finance data unavailable" and "zero spending" are different things.
+
+I also decided not to reconstruct totals manually from raw transactions. That would make these two races
+methodologically different from the rest of the dataset.
+
+So both races remain outside the final analytical dataset because comparable 2022 finance totals are not
+available through the same pipeline used for the other candidates.
+
+
+============================================================
+8. Separating analytical exclusions from missing data
+============================================================
+
+Originally, every skipped race ended up looking like a generic processing failure.
+
+That was misleading.
+
+For example:
+
+- Alaska has valid data, but multiple Republican candidates.
+- Louisiana has valid data, but multiple Democratic and Republican candidates.
+- Utah has valid data, but no Democratic general-election candidate.
+- Hawaii and Maryland fit the basic race model, but their finance data are unavailable.
+
+I added two explicit error types:
+
+    AnalysisExclusion
+    FinanceDataUnavailableError
+
+The processing loop now keeps separate collections for:
+
+- successful race summaries;
+- analytical exclusions;
+- unavailable finance data;
+- other RuntimeError failures.
+
+This made the output much easier to interpret.
+
+At this point:
+
+Analytical exclusions:
+    AK
+    LA
+    UT
+
+Finance unavailable:
+    HI
+    MD
+
+Other processing failures:
+    none
+
+The distinction matters because a race that does not fit the research design is not a broken race or a
+programming error.
+
+
+============================================================
+9. California: two elections, same candidate pair, same finance totals
+============================================================
+
+After the state+district change, both California elections could be processed:
+
+    CA - S-Full Term
+    CA - S-Unexpired Term
+
+However, both contests used the same candidate pair:
+
+    Alex Padilla
+    Mark Meuser
+
+The vote totals differ slightly between the two elections, but the finance values in the analysis are
+candidate-level 2021-2022 totals.
+
+That meant the output contained two California observations with:
+
+    the same spending values
+    different vote values
+
+Technically the pipeline was working, but analytically this would reuse the same spending measurement
+twice.
+
+I added the Democratic and Republican FEC candidate IDs to each race summary:
+
+    dem_candidate_id
+    rep_candidate_id
+
+After building the race summaries, the script checks whether the same D/R candidate pair appears in more
+than one race in the same state and year.
+
+If that happens across a full-term and unexpired-term race, the full-term race is kept and the duplicated
+unexpired-term observation is excluded.
+
+This is not hard-coded as:
+
+    if state == "CA"
+
+The rule depends on the candidate-pair duplication itself.
+
+Oklahoma is unaffected because its two contests have different candidates.
+
+Result:
+
+    CA - S-Full Term -> included
+    CA - S-Unexpired Term -> excluded
+
+
+============================================================
+10. Current 2022 dataset
+============================================================
+
+The source workbook contains:
+
+    34 states with Senate general-election data
+    36 distinct Senate contests
+
+The current pipeline successfully builds:
+
+    31 of 36 race summaries
+
+The final analytical dataset contains:
+
+    30 race observations
+
+Analytically excluded:
+    AK - multiple Republican candidates
+    LA - multiple Democratic and Republican candidates
+    UT - no Democratic general-election candidate
+    CA S-Unexpired Term - duplicate D/R candidate pair, so the candidate-level finance totals cannot be
+                         uniquely attributed between the two California contests
+
+Finance unavailable:
+    HI
+    MD
+
+Other unexplained processing failures:
+    none
+
+The project now saves both:
+
+    senate_2022.json
+    senate_2022_exclusions.json
+
+The exclusions file records:
+- year;
+- state;
+- district;
+- exclusion category;
+- reason.
+
+I wanted this separate file because otherwise someone looking only at the final 30 observations would not
+know why the other six contests are missing.
+
+
+============================================================
+Current pipeline
+============================================================
+
+FEC election-results workbook
+        |
+        v
+clean source fields / identifiers
+        |
+        v
+identify races using state + district
+        |
+        v
+select one race
+        |
+        v
+aggregate ballot lines by FEC candidate ID
+        |
+        v
+classify candidates into D/R analytical groups
+        |
+        v
+check whether the race fits the analysis
+        |
+        v
+retrieve OpenFEC finance totals
+        |
+        v
+merge election and finance data using FEC candidate ID
+        |
+        v
+calculate spending share and two-party vote share
+        |
+        v
+build one race-level observation
+        |
+        v
+process all races
+        |
+        v
+apply cross-race exclusions
+        |
+        v
+export analytical data + exclusion records
+
+
+============================================================
+Next milestone
+============================================================
+
+The next major step is the first useful D3 visualisation.
+
+Initial scatterplot:
+
+    x = spending_margin
+    y = vote_margin
+
+Planned first version:
+- one point per race;
+- state/race labels;
+- vertical zero line;
+- horizontal zero line.
+
+Later additions:
+- tooltips;
+- more race details;
+- possibly point size based on total spending;
+- filters;
+- additional election cycles.
+
+I want to keep the first visualisation simple enough that I understand every part of it before adding more
+interaction or statistical analysis.
+
+
+============================================================
+Template for future entries
+============================================================
+
+I do not need to follow this exactly every time, but these are the questions I want future entries to
+answer:
+
+Milestone:
+What was I trying to add or change?
+
+Problem:
+What went wrong or turned out to be more complicated than expected?
+
+Cause:
+Why was it happening?
+
+Investigation:
+How did I work out what the real problem was?
+
+Decision:
+What did I change, and why did I choose that approach?
+
+Result:
+What changed after the fix?
+
+Anything worth remembering:
+What would be useful to know if I revisit this part of the project later?

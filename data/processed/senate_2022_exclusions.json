@@ -1,0 +1,44 @@
+[
+  {
+    "year":2022,
+    "state":"AK",
+    "district":"S",
+    "category":"analytical_exclusion",
+    "reason":"Expected exactly one Democratic and one Republican candidate in AK (S), but found 1 D and 3 R."
+  },
+  {
+    "year":2022,
+    "state":"LA",
+    "district":"S",
+    "category":"analytical_exclusion",
+    "reason":"Expected exactly one Democratic and one Republican candidate in LA (S), but found 5 D and 2 R."
+  },
+  {
+    "year":2022,
+    "state":"UT",
+    "district":"S",
+    "category":"analytical_exclusion",
+    "reason":"Expected exactly one Democratic and one Republican candidate in UT (S), but found 0 D and 1 R."
+  },
+  {
+    "year":2022,
+    "state":"CA",
+    "district":"S-Unexpired Term",
+    "category":"analytical_exclusion",
+    "reason":"Same D\/R candidate pair also contested the full-term election; candidate-level finance totals cannot be attributed separately to the two contests."
+  },
+  {
+    "year":2022,
+    "state":"HI",
+    "district":"S",
+    "category":"finance_unavailable",
+    "reason":"No financial totals found for candidate S2HI00155."
+  },
+  {
+    "year":2022,
+    "state":"MD",
+    "district":"S",
+    "category":"finance_unavailable",
+    "reason":"No financial totals found for candidate S6MD03557."
+  }
+]

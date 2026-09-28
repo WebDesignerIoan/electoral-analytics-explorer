@@ -4,6 +4,14 @@ import httpx
 import pandas as pd
 from dotenv import load_dotenv
 
+
+class FinanceDataUnavailableError(RuntimeError):
+    """
+    Raised when OpenFEC has no financial totals for a candidate
+    under the requested election cycle.
+    """
+
+
 # Load environment variables from the project's .env file
 # This lets us use the FEC API key without hard-coding it into the source code
 load_dotenv()
@@ -50,8 +58,9 @@ def get_candidate_finance(candidate_id, election_year):
     totals_data = totals_response.json()
 
     if not totals_data["results"]:
-        raise RuntimeError(f"No financial totals found for candidate {candidate_id}.")
-
+        raise FinanceDataUnavailableError(
+            f"No financial totals found for candidate {candidate_id}."
+        )
     financial_record = totals_data["results"][0]
 
     return {
@@ -148,39 +157,13 @@ def get_candidate_record(search_name, election_year, state):
     }
 
 
-# ---------------------------------------------------------
-# TEST THE FUNCTION WITH BOTH MAJOR CANDIDATES IN ONE RACE
-# ---------------------------------------------------------
-
-# this is very interesting: if we run the function from this file, we run the pennsylvania race, but if this function is imported in a different file it will not automatically run the Fetterman/Oz test code (python: all top-level executable code (example: get_candidate_record(...)) in a module runs when the module is imported, unless you protect it with the __main__ guard)
-if __name__ == "__main__":
-    fetterman = get_candidate_record("Fetterman", 2022, "PA")
-    oz = get_candidate_record("Mehmet Oz", 2022, "PA")
-
-    candidate_df = pd.DataFrame([fetterman, oz])
-
-    print("\n2022 Pennsylvania Senate candidate finance data:")
-    print(candidate_df.to_string(index=False))
-
-    print("\nDirect finance lookup by FEC candidate ID:")
-
-    fetterman_finance = get_candidate_finance("S6PA00274", 2022)
-
-    print(fetterman_finance)
-
 # STRUCTURE
-# Search for candidate
-#        ↓
-# Filter candidate by state
-#        ↓
-# Get candidate ID
-#        ↓
-# Request candidate financial totals
-#        ↓
-# Select relevant financial fields
-#        ↓
-# Return one flat dictionary
-#        ↓
-# Repeat for each candidate
-#        ↓
-# Combine records into a pandas DataFrame
+# Receive a known FEC candidate ID
+#        >
+# Request candidate financial totals from OpenFEC
+#        >
+# Validate that financial totals are available
+#        >
+# Select the financial fields needed by the analysis
+#        >
+# Return one flat candidate-finance dictionary
